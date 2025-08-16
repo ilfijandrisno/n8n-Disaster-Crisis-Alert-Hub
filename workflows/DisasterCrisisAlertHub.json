@@ -1,0 +1,369 @@
+{
+  "name": "Disaster / Crisis Alert Hub",
+  "nodes": [
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "4d951717-036a-49c4-8b4b-f7c005e58dee",
+              "name": "HOME_LAT",
+              "value": "={{$env.HOME_LAT}}",
+              "type": "number"
+            },
+            {
+              "id": "6ea61fbc-4bc9-4601-bca6-a474d60d8bf7",
+              "name": "HOME_LON",
+              "value": "={{$env.HOME_LON}}",
+              "type": "number"
+            },
+            {
+              "id": "cfd8f837-60f1-4cab-8448-879aad13b8c4",
+              "name": "MAX_DISTANCE_KM",
+              "value": "={{$env.MAX_DISTANCE_KM}}",
+              "type": "number"
+            },
+            {
+              "id": "dd666c3a-0788-4b98-9c98-b810d2436ca6",
+              "name": "MIN_MAGNITUDE",
+              "value": "={{$env.MIN_MAGNITUDE}}",
+              "type": "number"
+            },
+            {
+              "id": "41a1c835-128b-4d8b-90d2-29e073606044",
+              "name": "TELEGRAM_CHAT_ID",
+              "value": "={{$env.TELEGRAM_CHAT_ID}}",
+              "type": "string"
+            },
+            {
+              "id": "ff02bb04-d83f-4530-b8d0-8e4929ca7928",
+              "name": "MAX_EVENT_AGE_MINUTES",
+              "value": "={{$env.MAX_EVENT_AGE_MINUTES}}",
+              "type": "number"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -112,
+        -96
+      ],
+      "id": "a38672f4-8df4-4f1b-acf0-fae2489a79fc",
+      "name": "Set (Config)"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -688,
+        -96
+      ],
+      "id": "544ac535-6e3b-4bcd-868d-2c0c62f3527f",
+      "name": "Schedule Trigger",
+      "retryOnFail": false,
+      "executeOnce": false,
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "url": "https://data.bmkg.go.id/DataMKG/TEWS/autogempa.json",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -400,
+        -96
+      ],
+      "id": "fc21c34d-2d58-4b59-98f1-38c8b5172fb6",
+      "name": "HTTP Request (BMKG)",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": false,
+      "executeOnce": false
+    },
+    {
+      "parameters": {
+        "language": "python",
+        "pythonCode": "# n8n Python (Beta)\n# Input dari node Set (Config) + HTTP BMKG\n# Output: { pass, text, shakemapUrl, eventId, mag, distanceKm, lat, lon }\n\nimport math, re\n\ndef to_float(x):\n    if x is None:\n        return None\n    s = str(x).replace(\",\", \".\")\n    m = re.search(r\"-?\\d+(\\.\\d+)?\", s)\n    return float(m.group()) if m else None\n\ndef parse_lat_lon_from_lb(g):\n    lat, lon = None, None\n    L = g.get(\"Lintang\")\n    B = g.get(\"Bujur\")\n    if L:\n        v = to_float(L)\n        hemi = str(L).strip().split()[-1].upper() if isinstance(L, str) else \"\"\n        # LS (South) negatif, LU (North) positif\n        lat = -abs(v) if hemi in (\"LS\",\"S\") else abs(v)\n    if B:\n        v = to_float(B)\n        hemi = str(B).strip().split()[-1].upper() if isinstance(B, str) else \"\"\n        # BB (West) negatif, BT (East) positif\n        lon = -abs(v) if hemi in (\"BB\",\"W\") else abs(v)\n    return lat, lon\n\ndef parse_lat_lon(g):\n    lat, lon = parse_lat_lon_from_lb(g)\n    c = g.get(\"Coordinates\")\n    if (lat is None or lon is None) and isinstance(c, str) and \",\" in c:\n        parts = c.split(\",\")\n        a = to_float(parts[0])\n        b = to_float(parts[1])\n        if a is not None and b is not None:\n            # deteksi urutan\n            if abs(a) <= 90 and abs(b) <= 180:\n                lat = lat if lat is not None else a\n                lon = lon if lon is not None else b\n            else:\n                lon = lon if lon is not None else a\n                lat = lat if lat is not None else b\n    return lat, lon\n\ndef haversine_km(lat1, lon1, lat2, lon2):\n    R = 6371.0\n    to_rad = math.radians\n    dlat = to_rad(lat2 - lat1)\n    dlon = to_rad(lon2 - lon1)\n    a = math.sin(dlat/2)**2 + math.cos(to_rad(lat1))*math.cos(to_rad(lat2))*math.sin(dlon/2)**2\n    return 2*R*math.asin(math.sqrt(a))\n\n# --- ambil satu item dari input ---\ninp = _input.all()[0].json\n\n# JSON BMKG bisa di beberapa kunci\ng = (inp.get(\"Infogempa\", {}).get(\"gempa\")\n     or inp.get(\"gempa\")\n     or inp)\n\nhome_lat = float(inp.get(\"HOME_LAT\"))\nhome_lon = float(inp.get(\"HOME_LON\"))\nmax_dist = float(inp.get(\"MAX_DISTANCE_KM\"))\nmin_mag  = float(inp.get(\"MIN_MAGNITUDE\") or 0)\n\nlat, lon = parse_lat_lon(g)\nmag = to_float(g.get(\"Magnitude\") or g.get(\"magnitude\") or 0)\nkedalaman = g.get(\"Kedalaman\") or \"-\"\ntanggal = g.get(\"Tanggal\") or \"\"\njam = g.get(\"Jam\") or \"\"\nwilayah = g.get(\"Wilayah\") or \"-\"\npotensi = g.get(\"Potensi\") or \"\"\ndirasakan = g.get(\"Dirasakan\") or \"\"\n\ndistance_km = None\nif all(v is not None for v in (home_lat, home_lon, lat, lon)):\n    distance_km = haversine_km(home_lat, home_lon, lat, lon)\n\nevent_id = g.get(\"Shakemap\") or g.get(\"DateTime\") or f\"{tanggal} {jam} {g.get('Coordinates','')}\".strip()\nshakemap_url = f\"https://data.bmkg.go.id/DataMKG/TEWS/{g['Shakemap']}\" if g.get(\"Shakemap\") else None\n\nwithin = True if distance_km is None else (distance_km <= max_dist)\npass_filters = (mag or 0) >= min_mag and within\n\nlines = [\n    \"⚠️ <b>Peringatan Gempa (BMKG)</b>\",\n    f\"<b>Magnitudo:</b> {mag if mag is not None else '-'}\",\n    f\"<b>Kedalaman:</b> {kedalaman}\",\n    f\"<b>Lokasi:</b> {wilayah}\",\n]\nif distance_km is not None:\n    lines.append(f\"<b>Jarak ke rumah:</b> {distance_km:.1f} km\")\nlines.append(f\"<b>Waktu:</b> {tanggal} {jam}\")\nif potensi:   lines.append(f\"<b>Potensi:</b> {potensi}\")\nif dirasakan: lines.append(f\"<b>Dirasakan:</b> {dirasakan}\")\nif shakemap_url: lines.append(f\"<b>Shakemap:</b> {shakemap_url}\")\n\nout = {\n    \"pass\": bool(pass_filters),\n    \"text\": \"\\n\".join(lines),\n    \"shakemapUrl\": shakemap_url,\n    \"eventId\": event_id,\n    \"mag\": mag,\n    \"distanceKm\": round(distance_km, 1) if distance_km is not None else None,\n    \"lat\": lat, \"lon\": lon\n}\n\nreturn [{ \"json\": out }]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -704,
+        352
+      ],
+      "id": "20c3de54-29e5-4dda-97d7-20a23ddd59ac",
+      "name": "Code (Python) Old",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "language": "python",
+        "pythonCode": "# n8n Code node (Python) — BMKG Quake Alert (polished + time-window dedup, safe quotes)\n\nimport math, re\nfrom datetime import datetime, timezone\n\n# -------- helpers --------\ndef to_float(x):\n    if x is None:\n        return None\n    s = str(x).replace(\",\", \".\")\n    m = re.search(r\"-?\\d+(\\.\\d+)?\", s)\n    return float(m.group()) if m else None\n\ndef fmt_num(x, digits=1, fallback=\"-\"):\n    try:\n        return f\"{float(x):.{digits}f}\"\n    except Exception:\n        return fallback\n\ndef mag_bucket(m):\n    if m is None:\n        return \"⚪\", \"Unknown\"\n    m = float(m)\n    if m >= 6.0:  return \"🔴\", \"Strong\"\n    if m >= 5.0:  return \"🟠\", \"Moderate\"\n    if m >= 3.5:  return \"🟡\", \"Light\"\n    return \"🟢\", \"Minor\"\n\ndef parse_lat_lon_from_lb(g):\n    lat = lon = None\n    L = g.get(\"Lintang\")\n    B = g.get(\"Bujur\")\n    if L:\n        v = to_float(L)\n        hemi = str(L).strip().split()[-1].upper() if isinstance(L, str) else \"\"\n        lat = -abs(v) if hemi in (\"LS\", \"S\") else abs(v)\n    if B:\n        v = to_float(B)\n        hemi = str(B).strip().split()[-1].upper() if isinstance(B, str) else \"\"\n        lon = -abs(v) if hemi in (\"BB\", \"W\") else abs(v)   # BB=West(-), BT/E=East(+)\n    return lat, lon\n\ndef parse_lat_lon(g):\n    lat, lon = parse_lat_lon_from_lb(g)\n    c = g.get(\"Coordinates\")\n    if (lat is None or lon is None) and isinstance(c, str) and \",\" in c:\n        a, b = [to_float(p) for p in c.split(\",\")[:2]]\n        if a is not None and b is not None:\n            if abs(a) <= 90 and abs(b) <= 180:\n                lat = lat if lat is not None else a\n                lon = lon if lon is not None else b\n            else:\n                lon = lon if lon is not None else a\n                lat = lat if lat is not None else b\n    return lat, lon\n\ndef haversine_km(lat1, lon1, lat2, lon2):\n    R = 6371.0\n    from math import radians, sin, cos, asin, sqrt\n    dlat = radians(lat2 - lat1); dlon = radians(lon2 - lon1)\n    a = sin(dlat/2)**2 + cos(radians(lat1))*cos(radians(lat2))*sin(dlon/2)**2\n    return 2*R*asin(sqrt(a))\n\ndef parse_event_dt(g):\n    # ISO 'DateTime'\n    if g.get(\"DateTime\"):\n        try:\n            dt = datetime.fromisoformat(str(g[\"DateTime\"]))\n            if dt.tzinfo is None:\n                dt = dt.replace(tzinfo=timezone.utc)\n            return dt.astimezone(timezone.utc)\n        except Exception:\n            pass\n    # 'Tanggal' + 'Jam' (WIB/WITA/WIT)\n    tanggal = (g.get(\"Tanggal\") or \"\").strip()\n    jam_raw = (g.get(\"Jam\") or \"\").strip()\n    if not tanggal or not jam_raw:\n        return None\n    tz = 7\n    up = jam_raw.upper()\n    if \"WITA\" in up: tz = 8\n    if \"WIT\" in up and \"WITA\" not in up: tz = 9\n    jam_clean = up.replace(\"WIB\",\"\").replace(\"WITA\",\"\").replace(\"WIT\",\"\").strip()\n    bulan_map = {\n        \"JAN\":\"01\",\"FEB\":\"02\",\"MAR\":\"03\",\"APR\":\"04\",\"MEI\":\"05\",\"MAY\":\"05\",\"JUN\":\"06\",\n        \"JUL\":\"07\",\"AGU\":\"08\",\"AGS\":\"08\",\"AGUSTUS\":\"08\",\"AUG\":\"08\",\"SEP\":\"09\",\n        \"OKT\":\"10\",\"OCT\":\"10\",\"NOV\":\"11\",\"DES\":\"12\",\"DEC\":\"12\"\n    }\n    try:\n        parts = tanggal.replace(\",\", \"\").split()\n        if len(parts) >= 3:\n            d = int(parts[0]); m = bulan_map.get(parts[1].upper()[:3], parts[1]); y = parts[2]\n            iso = f\"{y}-{m}-{d:02d}T{jam_clean}+{int(tz):02d}:00\"\n            return datetime.fromisoformat(iso).astimezone(timezone.utc)\n    except Exception:\n        return None\n    return None\n\n# -------- main --------\ninp = _input.item.json\ng = (inp.get(\"Infogempa\", {}).get(\"gempa\") or inp.get(\"gempa\") or inp)\n\nhome_lat = float(inp.get(\"HOME_LAT\"))\nhome_lon = float(inp.get(\"HOME_LON\"))\nmax_dist = float(inp.get(\"MAX_DISTANCE_KM\"))\nmin_mag  = float(inp.get(\"MIN_MAGNITUDE\") or 0)\nmax_age  = float(inp.get(\"MAX_EVENT_AGE_MINUTES\") or 6)  # minutes\n\nevt_dt = parse_event_dt(g)\n\nlat, lon = parse_lat_lon(g)\nmag = to_float(g.get(\"Magnitude\") or g.get(\"magnitude\") or 0)\nkedalaman = g.get(\"Kedalaman\") or \"-\"\ntanggal = g.get(\"Tanggal\") or \"\"\njam = g.get(\"Jam\") or \"\"\nwilayah = g.get(\"Wilayah\") or \"-\"\npotensi = g.get(\"Potensi\") or \"\"\ndirasakan = g.get(\"Dirasakan\") or \"\"\n\ndistance_km = None\nif all(v is not None for v in (home_lat, home_lon, lat, lon)):\n    distance_km = haversine_km(home_lat, home_lon, lat, lon)\n\nevent_id = g.get(\"Shakemap\") or g.get(\"DateTime\") or f\"{tanggal} {jam} {g.get('Coordinates','')}\".strip()\nshakemap_url = f\"https://data.bmkg.go.id/DataMKG/TEWS/{g['Shakemap']}\" if g.get(\"Shakemap\") else None\n\n# filters\nwithin = True if distance_km is None else (distance_km <= max_dist)\nage_ok = True\nage_min = None\nif evt_dt is not None:\n    age_min = (datetime.now(timezone.utc) - evt_dt).total_seconds() / 60.0\n    age_ok = (age_min >= 0) and (age_min <= max_age)\n\npass_filters = (mag or 0) >= min_mag and within and age_ok\n\n# -------- message (HTML, safe quotes) --------\nemoji, label = mag_bucket(mag)\nmaps_url = f\"https://www.google.com/maps?q={lat},{lon}\" if (lat is not None and lon is not None) else None\nmag_str = fmt_num(mag, 1)\ndist_str = f\"{fmt_num(distance_km,1)} km\" if distance_km is not None else \"-\"\n\nlines = []\nlines.append(f'<b>⚠️ GEMPA BMKG {emoji} {label}</b>')\nlines.append(f'<b>Magnitudo</b> <code>{mag_str}</code> • <b>Kedalaman</b> <code>{kedalaman}</code>')\nlines.append(f'<b>Lokasi</b> {wilayah}')\nif maps_url:\n    lines.append(f'<b>Koordinat</b> <code>{fmt_num(lat,2)},{fmt_num(lon,2)}</code> - <a href=\"{maps_url}\">Lihat peta</a>')\nif distance_km is not None:\n    lines.append(f'<b>Jarak ke rumah</b> <code>{dist_str}</code>')\nlines.append(f'<b>Waktu</b> {tanggal} {jam}')\nif potensi:\n    lines.append(f'<b>Potensi</b> {potensi}')\nif dirasakan:\n    lines.append(f'<b>Dirasakan</b> {dirasakan}')\nif shakemap_url:\n    lines.append(f'<a href=\"{shakemap_url}\">Shakemap</a>')\nlines.append('<i>Auto-alert via n8n</i>')\n\nout = {\n    \"pass\": bool(pass_filters),\n    \"text\": \"\\n\".join(lines),\n    \"shakemapUrl\": shakemap_url,\n    \"eventId\": event_id,\n    \"mag\": mag,\n    \"distanceKm\": round(distance_km, 1) if distance_km is not None else None,\n    \"lat\": lat, \"lon\": lon,\n    \"eventAgeMinutes\": round(age_min, 2) if age_min is not None else None\n}\nreturn [{ \"json\": out }]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -704,
+        144
+      ],
+      "id": "abf85e61-bc12-4818-b447-b55c006770fc",
+      "name": "Code (Python)"
+    },
+    {
+      "parameters": {
+        "chatId": "={{$node[\"Set (Config)\"].json.TELEGRAM_CHAT_ID}}",
+        "text": "={{$json.text}}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true,
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        160,
+        320
+      ],
+      "id": "0b579a88-4f53-470d-a720-eec5542f2045",
+      "name": "Send a text message",
+      "webhookId": "REDACTED",
+      "credentials": {
+        "telegramApi": {
+          "id": "DFsufNvSW8o7XHj2",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "sendPhoto",
+        "chatId": "={{$node[\"Set (Config)\"].json.TELEGRAM_CHAT_ID}}",
+        "binaryData": true,
+        "additionalFields": {
+          "caption": "={{$json.text}}",
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        400,
+        112
+      ],
+      "id": "e4dd48b2-7e53-4ecd-8bfc-ca36085e0c40",
+      "name": "Send a photo message",
+      "webhookId": "REDACTED",
+      "credentials": {
+        "telegramApi": {
+          "id": "DFsufNvSW8o7XHj2",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{$json.shakemapUrl}}",
+        "options": {
+          "allowUnauthorizedCerts": false,
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        160,
+        112
+      ],
+      "id": "09cd29b4-fa99-4881-9f49-55d350ea288e",
+      "name": "HTTP Request (Shakemap)",
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "faa7f576-e612-4b20-884a-93dc64b54d3a",
+              "leftValue": "={{$json.shakemapUrl}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -112,
+        128
+      ],
+      "id": "e81c2728-242d-436d-ab83-a6a1383b0268",
+      "name": "IF (hasShakemap?)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "290ee8e4-0039-4705-bcf2-8c084362579d",
+              "leftValue": "={{$json.pass}}",
+              "rightValue": "={{ true }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -416,
+        144
+      ],
+      "id": "95670d17-6383-49ed-95fb-d2d55131371f",
+      "name": "IF (pass)"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Set (Config)": {
+      "main": [
+        [
+          {
+            "node": "Code (Python)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request (BMKG)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request (BMKG)": {
+      "main": [
+        [
+          {
+            "node": "Set (Config)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code (Python) Old": {
+      "main": [
+        []
+      ]
+    },
+    "Code (Python)": {
+      "main": [
+        [
+          {
+            "node": "IF (pass)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request (Shakemap)": {
+      "main": [
+        [
+          {
+            "node": "Send a photo message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF (pass)": {
+      "main": [
+        [
+          {
+            "node": "IF (hasShakemap?)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF (hasShakemap?)": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request (Shakemap)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

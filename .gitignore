@@ -1,0 +1,48 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+pip-wheel-metadata/
+
+# Env files (DO NOT COMMIT SECRETS)
+.env
+.env.*
+*.env
+!.env.example
+
+# Node (just in case)
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# n8n local data
+.n8n/
+*.credentials
+*.secrets
+*.sqlite
+*.db
+
+# Docker artifacts
+*.log
+docker-data/
+volumes/
+
+# Backups / temp
+*.bak
+*.tmp
+~$*
+
+# Build artifacts
+dist/
+build/

@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  n8n:
+    image: n8nio/n8n:1.106.3
+    container_name: n8n_alert_hub
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    environment:
+      - TZ=${TZ:-Asia/Jakarta}
+      - GENERIC_TIMEZONE=${TZ:-Asia/Jakarta}
+      - N8N_HOST=${N8N_HOST:-localhost}
+      - N8N_PORT=${N8N_PORT:-5678}
+      - N8N_PROTOCOL=${N8N_PROTOCOL:-http}
+      - WEBHOOK_URL=${N8N_PROTOCOL:-http}://${N8N_HOST:-localhost}:${N8N_PORT:-5678}/
+      - NODE_FUNCTION_ALLOW_BUILTIN=*
+      - NODE_FUNCTION_ALLOW_EXTERNAL=*
+    volumes:
+      - n8n_data:/home/node/.n8n
+    restart: unless-stopped
+
+volumes:
+  n8n_data:
